@@ -2,7 +2,7 @@ import type { AgentEvent, AgentMessage, PrepareRequestContext } from "@earendil-
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { nativeInputCause, needsContinuation, type LhMessage } from "../core/native-messages.ts";
 
-export interface AdmissionScope { accountId: string; epoch: number; authorityRevision: number; selectedModelId: string }
+export interface AdmissionScope { accountId: string; epoch: number; authorityRevision: number; selectedModelId: string; provider?: string }
 export type NoDispatchKind = "background" | "all" | "other";
 export interface ChatGPTDispatchLifecycle {
  captured(scope: AdmissionScope): void;

@@ -7,7 +7,7 @@ import {
 	type TeachingAgent,
 } from "../agent/teacher-agent.ts";
 import { piEngineForSpec, type PiEngine } from "../agent/models.ts";
-import { chatGPTBackgroundAllowed, chatGPTScopeCurrent } from "../agent/chatgpt-bridge.ts";
+import { chatGPTBackgroundAllowed, chatGPTScopeCurrent, isChatGPTProvider } from "../agent/chatgpt-bridge.ts";
 import { chatGPTStreamError } from "../agent/chatgpt-stream.ts";
 import { ChatGPTRequestCycle, type ChatGPTDispatchLifecycle } from "../agent/chatgpt-request-cycle.ts";
 import { reconstructRequestCause } from "../core/native-messages.ts";
@@ -31,7 +31,7 @@ import { collectToolCallIds } from "./pi/call-ids.ts";
 import { providerEventNote } from "../agent/provider-events.ts";
 import { effectiveSettings, stores } from "./stores.ts";
 import { searchAvailable, searchProvider } from "./search.ts";
-import { providerKeyPresent } from "./keys.ts";
+import { keyValue, providerKeyPresent } from "./keys.ts";
 import {
 	extractionEnabled,
 	graphToolsEnabled,
@@ -136,7 +136,16 @@ setTurnRunner(async (chatId, input) => {
  *  FRESH so a settings PUT between dispatch and spawn lands. */
 function resolveEngine(role: ModelRole): PiEngine | undefined {
 	const spec = resolveRoleSpec(role, stores.settingsStore.readSettings());
-	return spec ? piEngineForSpec(spec) : undefined;
+	return spec ? engineForSpec(spec) : undefined;
+}
+
+function engineForSpec(spec: Parameters<typeof piEngineForSpec>[0], background: boolean | (() => boolean) = true, lifecycle?: ChatGPTDispatchLifecycle): PiEngine {
+	const endpoint = stores.settingsStore.readSettings()?.customEndpoint;
+	const apiKey = keyValue("CUSTOM_ENDPOINT_API_KEY");
+	const custom = spec.provider === "custom-endpoint" && endpoint && endpoint.modelId === spec.id && apiKey
+		? { ...endpoint, apiKey }
+		: undefined;
+	return piEngineForSpec(spec, background, lifecycle, custom);
 }
 
 setJobRespawn((jobId) => void jobRunner.runJob(jobId));
@@ -206,7 +215,7 @@ export async function handleChatInput(
 	// persist (nothing durable changes); wake-pipeline turns ride the same
 	// path. The affected tier is strong — the conversation chain's own tier
 	// (a chat.model override still resolves through it).
-	if (conversation.provider === "chatgpt") {
+	if (isChatGPTProvider(conversation.provider)) {
 		await refreshConnectionCatalog();
 		if (input.type === "steers" && !chatGPTBackgroundAllowed()) {
 			return Response.json({ error: "ChatGPT background use is off in this app. Automatic follow-up remains deferred in its queue." }, { status: 403 });
@@ -235,14 +244,14 @@ export async function handleChatInput(
 		noDispatch: (kind) => requestCycle?.noDispatch(kind),
 	};
 	let conversationEngine: PiEngine;
-	try { conversationEngine = piEngineForSpec(conversation, () => callPurpose.background, lifecycle); }
-	catch { return Response.json({ error: conversation.provider === "chatgpt" ? chatGPTStreamError("model catalog") : "The selected model is unavailable." }, { status: 503 }); }
+	try { conversationEngine = engineForSpec(conversation, () => callPurpose.background, lifecycle); }
+	catch { return Response.json({ error: isChatGPTProvider(conversation.provider) ? chatGPTStreamError("model catalog") : "The selected model is unavailable." }, { status: 503 }); }
 	const modelIdForCompaction = `${conversationEngine.model.provider}:${conversationEngine.model.id}`;
 	await ensureCompacted(
 		{
 			chatStore: stores.chatStore,
-			engine: piEngineForSpec(conversation, true),
-			canStart: () => conversation.provider !== "chatgpt" || chatGPTBackgroundAllowed(),
+			engine: engineForSpec(conversation, true),
+			canStart: () => !isChatGPTProvider(conversation.provider) || chatGPTBackgroundAllowed(),
 			modelId: modelIdForCompaction,
 			kind: record.kind === "practice" ? "practice" : hasProbeDone(record.messages) ? "teach" : "probe",
 			thresholdTokens: effectiveThresholdTokens(
@@ -308,7 +317,7 @@ export async function handleChatInput(
 	// ride this same write-ahead - the pump de-queued them at fire, so this
 	// is the ONLY copy ever appended.)
 	const merged = [...record.messages, ...appends];
-	const stagedAutomatic = conversation.provider === "chatgpt" && input.type === "steers";
+	const stagedAutomatic = isChatGPTProvider(conversation.provider) && input.type === "steers";
 	let persistBaseCount = stagedAutomatic ? record.messages.length : merged.length;
 	try {
 		if (!stagedAutomatic) stores.chatStore.saveMessages(chatId, merged);
@@ -362,7 +371,7 @@ export async function handleChatInput(
 	// enabled). The definitive toggleable set is TOGGLEABLE_TOOLS — the
 	// sub-agent JOB tools (research/demo/visual/pdf; adjudicated with the
 	// user: quiz/ask/fs/plan/probe_done are always-on).
-	if (conversation.provider === "chatgpt") requestCycle = new ChatGPTRequestCycle({
+	if (isChatGPTProvider(conversation.provider)) requestCycle = new ChatGPTRequestCycle({
 		initialMessages: asAgentMessages(merged),
 		staged: stagedAutomatic ? asAgentMessages(appends) : undefined,
 		foregroundOwed: !callPurpose.background,
@@ -489,7 +498,7 @@ export async function handleChatInput(
 			// route through here: they ride the error-result path and reach the
 			// transcript directly (the retry context the model saw).
 			onError: (error) => {
-				if (conversation.provider === "chatgpt") return chatGPTStreamError(String(error));
+				if (isChatGPTProvider(conversation.provider)) return chatGPTStreamError(String(error));
 				console.error(`[chat ${chatId}] turn error:`, error);
 				return "An error occurred.";
 			},
@@ -560,16 +569,16 @@ export async function handleChatInput(
 					kickCompaction(() => {
 						const fresh = effectiveSettings();
 						const spec = resolveConversationSpec(stores.chatStore.getChat(chatId)?.settings, fresh.models.strong);
-						if (!spec || (spec.provider === "chatgpt" && !chatGPTBackgroundAllowed())) return null;
+						if (!spec || (isChatGPTProvider(spec.provider) && !chatGPTBackgroundAllowed())) return null;
 						let kickEngine: PiEngine;
-						try { kickEngine = piEngineForSpec(spec, true); } catch { return null; }
+						try { kickEngine = engineForSpec(spec, true); } catch { return null; }
 						const kickModelId = `${kickEngine.model.provider}:${kickEngine.model.id}`;
 						const freshRecord = stores.chatStore.getChat(chatId);
 						if (!freshRecord) return null;
 						return {
 							chatStore: stores.chatStore,
 							engine: kickEngine,
-							canStart: () => spec.provider !== "chatgpt" || chatGPTBackgroundAllowed(),
+							canStart: () => !isChatGPTProvider(spec.provider) || chatGPTBackgroundAllowed(),
 							modelId: kickModelId,
 							kind: freshRecord.kind === "practice" ? "practice" : hasProbeDone(freshRecord.messages) ? "teach" : "probe",
 							thresholdTokens: effectiveThresholdTokens(

@@ -8,11 +8,12 @@ import {
 	type StreamFunction,
 } from "@earendil-works/pi-ai";
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
+import { streamSimple as openAICompatibleStream } from "@earendil-works/pi-ai/api/openai-completions";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { type ModelRole } from "../../config.ts";
 import { DEFAULT_THINKING_ORDER } from "../core/settings.ts";
 import packageMetadata from "../../package.json" with { type: "json" };
-import { chatGPTModel } from "./chatgpt-bridge.ts";
+import { chatGPTModel, isChatGPTProvider } from "./chatgpt-bridge.ts";
 import { chatGPTStream } from "./chatgpt-stream.ts";
 import type { ChatGPTDispatchLifecycle } from "./chatgpt-request-cycle.ts";
 
@@ -80,6 +81,27 @@ export interface ResolvedModelSpec {
 	thinkingLevel?: ThinkingLevel;
 }
 
+export interface CustomEndpointConfig { baseUrl: string; modelId: string; apiKey: string }
+
+/** Model metadata is deliberately unpriced and has no declared context cap:
+ *  custom endpoints rarely publish reliable catalogs, so the UI shows usage
+ *  without fabricating price or context-window figures. */
+export function customEndpointModel(config: Pick<CustomEndpointConfig, "baseUrl" | "modelId">): Model<"openai-completions"> {
+	return {
+		id: config.modelId,
+		name: config.modelId,
+		api: "openai-completions",
+		provider: "custom-endpoint",
+		baseUrl: config.baseUrl,
+		input: ["text"],
+		reasoning: false,
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 0,
+		maxTokens: 0,
+		compat: { supportsDeveloperRole: false, supportsReasoningEffort: false },
+	};
+}
+
 /** The first entry of the baked default order the model supports (owner,
  *  2026-09-22). A non-reasoning model reports exactly ["off"], so the
  *  order walk lands there naturally. */
@@ -96,9 +118,9 @@ function defaultThinkingLevel(model: Model<Api>): ThinkingLevel {
  *  key is resolved by pi-ai itself from the environment per request (the
  *  keys seam reflects file-saved keys into env), so the engine never
  *  hardcodes OpenRouter's. */
-export function piEngineForSpec(spec: ResolvedModelSpec, background: boolean | (() => boolean) = true, lifecycle?: ChatGPTDispatchLifecycle): PiEngine {
+export function piEngineForSpec(spec: ResolvedModelSpec, background: boolean | (() => boolean) = true, lifecycle?: ChatGPTDispatchLifecycle, custom?: CustomEndpointConfig): PiEngine {
 	const models: Models = piModels();
-	const model = spec.provider === "chatgpt" ? chatGPTModel(spec.id) : models.getModel(spec.provider, spec.id);
+	const model = isChatGPTProvider(spec.provider) ? chatGPTModel(spec.id, spec.provider) : spec.provider === "custom-endpoint" && custom?.modelId === spec.id ? customEndpointModel(custom) : models.getModel(spec.provider, spec.id);
 	if (!model) {
 		throw new Error(`${spec.provider} catalog has no model ${spec.id}`);
 	}
@@ -115,7 +137,8 @@ export function piEngineForSpec(spec: ResolvedModelSpec, background: boolean | (
 		// `reasoning` (undefined = off on pi-ai's scale); the clamp above keeps
 		// the pin honest even when config or settings drift off the map.
 		streamFn: (requestModel, context, options) => {
-			const stream = spec.provider === "chatgpt" ? chatGPTStream(typeof background === "function" ? background : () => background, lifecycle) : models.streamSimple.bind(models);
+			if (spec.provider === "custom-endpoint" && custom) return openAICompatibleStream(requestModel as Model<"openai-completions">, context, { ...options, apiKey: custom.apiKey });
+			const stream = isChatGPTProvider(spec.provider) ? chatGPTStream(typeof background === "function" ? background : () => background, lifecycle) : models.streamSimple.bind(models);
 			return stream(requestModel, context, { ...options, reasoning: level === "off" ? undefined : level });
 		},
 	};

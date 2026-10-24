@@ -126,12 +126,12 @@ export function ModelMenuList({
 							<span className="flex items-center justify-between gap-2">
 								<span className="truncate text-card-foreground">{m.name}</span>
 								<span className="shrink-0 tabular-nums text-muted-foreground" title="USD per 1M tokens in/out">
-									{m.provider === "chatgpt" ? "ChatGPT plan" : priceLabel(m.cost)}
+									{m.provider === "chatgpt-codex" ? "Codex plan" : m.provider === "chatgpt" ? "ChatGPT plan" : m.provider === "custom-endpoint" ? "Custom endpoint" : priceLabel(m.cost)}
 								</span>
 							</span>
 							<span className="flex items-center justify-between gap-2 text-muted-foreground">
 								<span className="truncate">{m.provider} · {m.id}</span>
-								<span className="shrink-0 tabular-nums">{formatTokens(m.contextWindow)}</span>
+								<span className="shrink-0 tabular-nums">{m.contextWindow > 0 ? formatTokens(m.contextWindow) : "—"}</span>
 							</span>
 						</button>
 					</li>

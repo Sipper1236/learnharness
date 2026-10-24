@@ -1,8 +1,9 @@
 import type { Api, AssistantMessage, Model, SimpleStreamOptions, StreamFunction, TranscriptContext } from "@earendil-works/pi-ai";
 import { streamSimple } from "@earendil-works/pi-ai/api/openai-responses";
+import { streamSimple as streamCodex } from "@earendil-works/pi-ai/api/openai-codex-responses";
 import { AssistantMessageEventStream } from "@earendil-works/pi-ai/utils/event-stream";
 import { transformMessages } from "@earendil-works/pi-ai/api/transform-messages";
-import { chatGPTAbortController, chatGPTScope, chatGPTScopeCurrent, chatGPTLease, chatGPTDenial } from "./chatgpt-bridge.ts";
+import { chatGPTAbortController, chatGPTScope, chatGPTScopeCurrent, chatGPTLease, chatGPTDenial, isChatGPTProvider } from "./chatgpt-bridge.ts";
 import type { AdmissionScope, ChatGPTDispatchLifecycle } from "./chatgpt-request-cycle.ts";
 
 const USAGE = "https://chatgpt.com/settings/usage";
@@ -39,10 +40,11 @@ export function chatGPTHistory(context: TranscriptContext, logicalModel: Model<A
 	// Apply Pi's normal foreign-model signature treatment BEFORE the alias
 	// becomes openai, or real API-key turns could look like subscription turns.
 	const messages = transformMessages(context.messages, logicalModel);
-	return { ...context, messages: messages.map((m) => m.role === "assistant" && m.provider === "chatgpt" ? { ...m, provider: "openai" } : m) };
+	const targetProvider = logicalModel.api === "openai-codex-responses" ? "openai-codex" : "openai";
+	return { ...context, messages: messages.map((m) => m.role === "assistant" && isChatGPTProvider(m.provider) ? { ...m, provider: targetProvider } : m) };
 }
 function empty(model: Model<Api>): AssistantMessage {
-	return { role: "assistant", api: model.api, provider: "chatgpt", model: model.id, content: [], stopReason: "error", timestamp: Date.now(), usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } };
+	return { role: "assistant", api: model.api, provider: model.provider, model: model.id, content: [], stopReason: "error", timestamp: Date.now(), usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } };
 }
 export function chatGPTStream(background: () => boolean, lifecycle?: ChatGPTDispatchLifecycle): StreamFunction<Api, SimpleStreamOptions> {
 	return (logicalModel, context, options) => {
@@ -59,16 +61,20 @@ export function chatGPTStream(background: () => boolean, lifecycle?: ChatGPTDisp
 			let terminal = false;
 			const check = () => { if (signal.aborted || !scope || !chatGPTScopeCurrent(scope)) throw new Error("cancelled or catalog authority changed"); };
 			try {
-				if (logicalModel.provider !== "chatgpt") throw new Error("ChatGPT account catalog has no selected model");
+				if (!isChatGPTProvider(logicalModel.provider)) throw new Error("ChatGPT account catalog has no selected model");
 				if (Object.keys(options?.headers ?? {}).some((key) => key.toLowerCase() === "authorization")) throw new Error("Authorization override is forbidden");
-				scope = chatGPTScope(logicalModel.id);
+				scope = chatGPTScope(logicalModel.id, logicalModel.provider);
 				lifecycle?.captured(scope);
 				const credentials = await chatGPTLease(scope, purpose);
 				check();
 				// NEVER dispatch through Models under openai: that would expose ambient API-key fallback.
-				const transport: Model<"openai-responses"> = { ...logicalModel, api: "openai-responses", provider: "openai", baseUrl: "https://api.openai.com/v1", headers: undefined, samplingParams: undefined, compat: { ...logicalModel.compat, supportsDeveloperRole: true } };
+				const codex = logicalModel.api === "openai-codex-responses";
+				const transport = codex
+					? { ...logicalModel, api: "openai-codex-responses" as const, provider: "openai-codex", baseUrl: "https://chatgpt.com/backend-api", headers: undefined, samplingParams: undefined }
+					: { ...logicalModel, api: "openai-responses" as const, provider: "openai", baseUrl: "https://api.openai.com/v1", headers: undefined, samplingParams: undefined, compat: { ...logicalModel.compat, supportsDeveloperRole: true } };
 				const delegate = options?.fetch ?? globalThis.fetch;
-				const source = streamSimple(transport, chatGPTHistory(context, logicalModel), {
+				const stream = codex ? streamCodex : streamSimple;
+				const source = stream(transport as never, chatGPTHistory(context, logicalModel), {
 					...options,
 					apiKey: credentials.accessToken,
 					signal,
@@ -97,7 +103,7 @@ export function chatGPTStream(background: () => boolean, lifecycle?: ChatGPTDisp
 				for await (const event of source) {
 					const message = "partial" in event ? event.partial : event.type === "done" ? event.message : event.error;
 					// Copy the message, not its tool/reasoning blocks: IDs/signatures remain byte-for-byte intact.
-					partial = { ...message, provider: "chatgpt" };
+					partial = { ...message, provider: logicalModel.provider };
 					if (event.type === "done") {
 						if (!completed || failure) throw new Error(failure || "missing terminal response.completed");
 						terminal = true;

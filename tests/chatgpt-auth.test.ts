@@ -20,7 +20,7 @@ function fixture(options: { state?: any; expires?: number; timeoutMs?: number; t
 	let saved = structuredClone(options.state ?? initial());
 	let url!: URL;
 	let writeCount = 0;
-	const changed = deferred();
+	let changed = deferred();
 	const requests: { url: string; form?: URLSearchParams }[] = [];
 	const service = createChatGPT({
 		store: { secure() { options.secure?.(); }, async read() { return structuredClone(saved); }, async write(next: any) { writeCount++; await options.write?.(next); saved = structuredClone(next); } },
@@ -49,7 +49,7 @@ function fixture(options: { state?: any; expires?: number; timeoutMs?: number; t
 		const catalog = await discovered;
 		return rawLease(background, { expectedAccountId: catalog.accountId ?? saved.activeId ?? "scratch-missing", expectedAuthorityRevision: catalog.authorityRevision, selectedModelId: "gpt-5" });
 	};
-	return { service, rawLease, requests, changed, get url() { return url; }, get saved() { return saved; }, get writeCount() { return writeCount; }, async callback(params: Record<string, string> = {}) {
+	return { service, rawLease, requests, get changed() { return changed; }, resetChanged() { changed = deferred(); }, get url() { return url; }, get saved() { return saved; }, get writeCount() { return writeCount; }, async callback(params: Record<string, string> = {}) {
 		const callback = new URL(url.searchParams.get("redirect_uri")!);
 		callback.search = new URLSearchParams({ state: url.searchParams.get("state")!, code: "scratch-code", client_id: "oaiapp_scratch", ...params }).toString();
 		return fetch(callback);
@@ -254,6 +254,7 @@ test("invalid rotating replacement is durably revocation-only; verified mapping 
 			await restarted.service.logout(restricted.id);
 			assert.equal(restarted.requests.find((r) => r.form?.has("token_type_hint"))!.form!.get("token"), "likely-latest-revoke-handle");
 			assert.equal(restarted.saved.registrations[0].reconnectRequired, true);
+			restarted.resetChanged();
 			await restarted.service.login(restricted.id); await restarted.callback(); await restarted.changed.promise;
 			// Wait for callback's asynchronous encrypted activation, not the prior status push.
 			for (let i = 0; i < 30 && restarted.saved.registrations[0].reconnectRequired; i++) await new Promise((resolve) => setImmediate(resolve));

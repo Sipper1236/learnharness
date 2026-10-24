@@ -62,7 +62,7 @@ export function useModelCatalog(): { catalog: ModelCatalogResponse | undefined; 
  *  the honest-render precedent). Consumed by the stats bar: the same
  *  cached /api/models fetch the picker rides feeds the denominator. */
 export function catalogLimits(catalog: Pick<ModelCatalogResponse, "models">): Map<string, number> {
-	return new Map(catalog.models.map((m) => [`${m.provider}:${m.id}`, m.contextWindow]));
+	return new Map(catalog.models.filter((m) => m.contextWindow > 0).map((m) => [`${m.provider}:${m.id}`, m.contextWindow]));
 }
 
 /**

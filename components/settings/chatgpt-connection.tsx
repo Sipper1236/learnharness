@@ -375,6 +375,6 @@ export function ChatGPTConnection({ setup = false }: { setup?: boolean }) {
 export function ChatGPTBackgroundAccess({ provider }: { provider: string | undefined }) {
 	const ui = useContext(Context);
 	const account: Account | undefined = ui.status.accounts.find((a) => a.id === ui.status.activeId && a.connected);
-	if (provider !== "chatgpt" || !account || ui.status.allowBackgroundUse) return null;
+	if ((provider !== "chatgpt" && provider !== "chatgpt-codex") || !account || ui.status.allowBackgroundUse) return null;
 	return <Button type="button" size="xs" variant="ghost" className="cursor-pointer" disabled={ui.busy} onClick={() => ui.manage(account.id)}>Enable background use</Button>;
 }

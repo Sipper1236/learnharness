@@ -205,6 +205,8 @@ export interface ModelsSettings {
 	vision?: ModelSlot;
 }
 
+export interface CustomEndpointSettings { baseUrl: string; modelId: string }
+
 /** First-run gate (model-slots wave, owner 2026-09-20): the app refuses
  *  to start chats until the user has actively picked all three slots —
  *  there ARE no defaults for 33 providers; a configured app is one whose
@@ -367,6 +369,7 @@ export interface UserSettings {
 	appearance?: AppearanceSettings;
 	graph?: GraphSettings;
 	compaction?: CompactionSettings;
+	customEndpoint?: CustomEndpointSettings;
 	[key: string]: unknown;
 }
 
@@ -486,6 +489,24 @@ function sanitizeModels(raw: Record<string, unknown>): ModelsSettings {
 		if (cleaned) out[slot] = cleaned;
 	}
 	return out;
+}
+
+/** Remote endpoints require TLS; plain HTTP is limited to loopback services. */
+export function safeEndpointUrl(raw: string): string | undefined {
+	try {
+		const url = new URL(raw.trim());
+		const local = ["localhost", "127.0.0.1", "::1", "[::1]"].includes(url.hostname);
+		if ((url.protocol !== "https:" && !(url.protocol === "http:" && local)) || url.username || url.password || url.search || url.hash) return undefined;
+		return url.toString().replace(/\/$/, "");
+	} catch { return undefined; }
+}
+
+function sanitizeCustomEndpoint(raw: unknown): CustomEndpointSettings | undefined {
+	if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+	const value = raw as Record<string, unknown>;
+	const baseUrl = typeof value.baseUrl === "string" ? safeEndpointUrl(value.baseUrl) : undefined;
+	if (!baseUrl || typeof value.modelId !== "string" || !value.modelId.trim()) return undefined;
+	return { baseUrl, modelId: value.modelId.trim() };
 }
 
 function sanitizeBooleanMap(raw: unknown): Record<string, boolean> | undefined {
@@ -627,17 +648,17 @@ export function sanitizeUserSettings(raw: unknown): UserSettings | null {
 	}
 	if (r.graph !== null && typeof r.graph === "object" && !Array.isArray(r.graph)) {
 		out.graph = sanitizeGraph(r.graph as Record<string, unknown>);
-		if (r.compaction !== undefined && r.compaction !== null && typeof r.compaction === "object") {
-			out.compaction = sanitizeCompaction(r.compaction as Record<string, unknown>);
-		}
 	}
+	if (r.compaction !== undefined && r.compaction !== null && typeof r.compaction === "object") out.compaction = sanitizeCompaction(r.compaction as Record<string, unknown>);
+	const customEndpoint = sanitizeCustomEndpoint(r.customEndpoint);
+	if (customEndpoint) out.customEndpoint = customEndpoint;
 	// Unknown top-level keys ride along untouched (forward-compat). One
 	// known-DEAD key is stripped instead of riding: `chat` (the old
 	// default-settings section) died with per-session models (owner,
 	// 2026-09-28) — a fossil copy on disk must never resurrect through
 	// reads (and any later write flushes it from the file for good).
 	for (const [key, value] of Object.entries(r)) {
-		if (key === "chat") continue;
+		if (key === "chat" || key === "customEndpoint") continue;
 		if (!(key in out)) out[key] = value;
 	}
 	return out;
