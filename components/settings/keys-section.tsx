@@ -44,6 +44,53 @@ interface KeysResponse {
 	providers?: ProviderKeyInfo[];
 }
 
+function CustomEndpointSettingsForm() {
+	const [baseUrl, setBaseUrl] = useState("");
+	const [modelId, setModelId] = useState("");
+	const [busy, setBusy] = useState(false);
+	const [error, setError] = useState<string | null>(null);
+	const [configured, setConfigured] = useState(false);
+	useEffect(() => {
+		fetch("/api/settings/custom-endpoint").then((r) => r.json()).then((body: { endpoint?: { baseUrl: string; modelId: string } | null }) => {
+			if (body.endpoint) { setBaseUrl(body.endpoint.baseUrl); setModelId(body.endpoint.modelId); setConfigured(true); }
+		}).catch(() => setError("Could not load endpoint settings."));
+	}, []);
+	async function save() {
+		if (busy) return;
+		setBusy(true); setError(null);
+		try {
+			const response = await fetch("/api/settings/custom-endpoint", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ baseUrl, modelId }) });
+			const result = await response.json() as { error?: string; endpoint?: { baseUrl: string; modelId: string } };
+			if (!response.ok || !result.endpoint) throw new Error(result.error ?? "Could not save endpoint.");
+			setBaseUrl(result.endpoint.baseUrl); setModelId(result.endpoint.modelId); setConfigured(true);
+			notifySettingsSaved("models");
+		} catch (err) { setError(err instanceof Error ? err.message : "Could not save endpoint."); }
+		finally { setBusy(false); }
+	}
+	async function remove() {
+		if (busy) return;
+		setBusy(true); setError(null);
+		try {
+			const response = await fetch("/api/settings/custom-endpoint", { method: "DELETE" });
+			if (!response.ok) throw new Error("Could not remove endpoint.");
+			setBaseUrl(""); setModelId(""); setConfigured(false); notifySettingsSaved("models");
+		} catch (err) { setError(err instanceof Error ? err.message : "Could not remove endpoint."); }
+		finally { setBusy(false); }
+	}
+	return (
+		<SettingsGroup label="Custom OpenAI-compatible endpoint" testid="group-custom-endpoint">
+			<p className="px-1 pb-2 text-xs text-muted-foreground">Chat Completions compatible. Use HTTPS for remote servers; HTTP works on localhost.</p>
+			<div className="flex flex-wrap items-center gap-2 px-1">
+				<input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="https://host.example/v1" aria-label="Custom endpoint base URL" data-testid="custom-endpoint-url" disabled={busy} className="h-8 min-w-56 flex-1 rounded-sm border border-border bg-background px-2 font-mono text-xs text-foreground outline-none placeholder:text-muted-foreground/60 focus:border-muted-foreground/50" />
+				<input value={modelId} onChange={(e) => setModelId(e.target.value)} placeholder="Model ID" aria-label="Custom endpoint model ID" data-testid="custom-endpoint-model" disabled={busy} className="h-8 min-w-32 flex-1 rounded-sm border border-border bg-background px-2 font-mono text-xs text-foreground outline-none placeholder:text-muted-foreground/60 focus:border-muted-foreground/50" />
+				<button type="button" onClick={() => void save()} disabled={busy || !baseUrl.trim() || !modelId.trim()} data-testid="custom-endpoint-save" className="text-xs text-foreground underline-offset-2 hover:underline disabled:text-muted-foreground/40 disabled:no-underline">Save</button>
+				{configured && <button type="button" onClick={() => void remove()} disabled={busy} data-testid="custom-endpoint-remove" className="text-xs text-muted-foreground/70 underline-offset-2 hover:text-red-500 hover:underline">Remove</button>}
+			</div>
+			{error && <p role="alert" className="px-1 pt-1 text-xs text-red-500">{error}</p>}
+		</SettingsGroup>
+	);
+}
+
 /** The curated tools group, pinned by id (the catalog owns the copy;
  *  these ids are the contract). Derived from the catalog (search wave,
  *  2026-09-20: the Google CSE pair retired, Tavily + Brave joined) — the
@@ -413,6 +460,7 @@ export function KeysSection({
 
 	return (
 		<>
+			<CustomEndpointSettingsForm />
 			<SettingsGroup label="Model API keys" testid="group-provider-keys">
 				{providerRows.map((status) => (
 					<KeyTableRow

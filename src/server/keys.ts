@@ -75,7 +75,7 @@ function boot(): AuthBoot {
 /** Is `id` a WRITABLE key name — curated catalog or model-provider env
  *  var (provider-keys interlude: PUT/DELETE accept both). */
 export function isWritableAuthKey(id: string): boolean {
-	return isKnownAuthKey(id) || isProviderEnvVar(id);
+	return id === "CUSTOM_ENDPOINT_API_KEY" || isKnownAuthKey(id) || isProviderEnvVar(id);
 }
 
 /** The settings page's provider dropdown: every pi-ai provider that takes
@@ -83,7 +83,7 @@ export function isWritableAuthKey(id: string): boolean {
  *  in core/auth-keys.ts and tests/auth-provider-keys.test.ts). Sorted by
  *  id for a stable payload. */
 export function providerKeyList() {
-	return [...AUTH_PROVIDER_KEYS].sort((a, b) => a.id.localeCompare(b.id));
+	return [...AUTH_PROVIDER_KEYS, { id: "custom-endpoint", envVar: "CUSTOM_ENDPOINT_API_KEY", label: "Custom endpoint" }].sort((a, b) => a.id.localeCompare(b.id));
 }
 
 /** The fresh-user switch (owner, interlude 2026-09-22): env keys are
@@ -104,6 +104,7 @@ export function initAuthEnv(): void {
 	const fileVars = authStore.authVars();
 	const managed = new Set<string>([
 		...Object.keys(fileVars),
+		"CUSTOM_ENDPOINT_API_KEY",
 		...AUTH_KEYS.map((k) => k.id),
 		// Provider env vars are managed names too (provider-keys interlude):
 		// an env-exported OPENAI_API_KEY with a file copy gets honest shadow
@@ -179,7 +180,7 @@ export function resolveKeyStatuses(
 
 /** The GET view: every curated key (present or not) + unknown file vars. */
 export function keyStatuses(): AuthKeyStatus[] {
-	return resolveKeyStatuses(authStore.authVars(), process.env, boot().realEnv, AUTH_PROVIDER_ENV_VARS);
+	return resolveKeyStatuses(authStore.authVars(), process.env, boot().realEnv, new Set([...AUTH_PROVIDER_ENV_VARS, "CUSTOM_ENDPOINT_API_KEY"]));
 }
 
 /** The live value for one var, env-first (the env-wins rule) — the canonical
@@ -201,6 +202,7 @@ export function keyValue(id: string): string | undefined {
  * (gate by what would run). Providers absent from AUTH_PROVIDER_KEYS take
  * no key at all: nothing to gate, present by definition. */
 export function providerKeyPresent(provider: string): boolean {
+	if (provider === "custom-endpoint") return keyValue("CUSTOM_ENDPOINT_API_KEY") !== undefined;
 	if (provider === "chatgpt") return chatGPTConnected();
 	const info = AUTH_PROVIDER_KEYS.find((p) => p.id === provider);
 	return info ? keyValue(info.envVar) !== undefined : true;
@@ -213,7 +215,7 @@ export function providerKeyPresent(provider: string): boolean {
  * reports shadowedByEnv so the page can explain it).
  */
 export function saveKey(id: string, value: string): { ok: true; status: AuthKeyStatus } | { ok: false; error: string } {
-	const shape = isProviderEnvVar(id) ? genericProviderKeyGuard(id, value) : validateKeyShape(id, value);
+	const shape = isProviderEnvVar(id) || id === "CUSTOM_ENDPOINT_API_KEY" ? genericProviderKeyGuard(id, value) : validateKeyShape(id, value);
 	if (!shape.ok) return { ok: false, error: shape.error };
 	const trimmed = value.trim();
 	authStore.setAuthVar(id, trimmed);

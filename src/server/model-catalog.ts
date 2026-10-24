@@ -19,16 +19,20 @@
 
 import { clampThinkingLevel, getSupportedThinkingLevels, type Api, type Model } from "@earendil-works/pi-ai";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
-import { piModels } from "../agent/models.ts";
+import { customEndpointModel, piModels } from "../agent/models.ts";
 import { chatGPTConnected, chatGPTModel, chatGPTModels, refreshChatGPTModels } from "../agent/chatgpt-bridge.ts";
 
 export async function refreshConnectionCatalog(): Promise<void> {
 	await refreshChatGPTModels(piModels().getModels("openai").filter((m): m is Model<"openai-responses"> => m.api === "openai-responses"));
 }
 function connectionModel(provider: string, id: string): Model<Api> | undefined {
+	if (provider === "custom-endpoint") {
+		const endpoint = settingsStore.readSettings()?.customEndpoint;
+		return endpoint?.modelId === id ? customEndpointModel(endpoint) : undefined;
+	}
 	return provider === "chatgpt" ? chatGPTModel(id) : piModels().getModel(provider, id);
 }
-function connectionProviderIds(): string[] { return [...piModels().getProviders().map((p) => p.id), "chatgpt"]; }
+function connectionProviderIds(): string[] { return [...piModels().getProviders().map((p) => p.id), "chatgpt", ...(settingsStore.readSettings()?.customEndpoint ? ["custom-endpoint"] : [])]; }
 import { settingsStore } from "../store/settings.ts";
 import { effectiveSettings } from "./stores.ts";
 import { keyValue } from "./keys.ts";
@@ -134,7 +138,10 @@ export function catalogProviders(): CatalogProvider[] {
 		id: p.id,
 		envVar: p.envVar,
 		keyPresent: keyValue(p.envVar) !== undefined,
-	})).concat([{ id: "chatgpt", envVar: "", keyPresent: chatGPTConnected() }]).sort((a, b) => a.id.localeCompare(b.id));
+	})).concat([
+		{ id: "chatgpt", envVar: "", keyPresent: chatGPTConnected() },
+		...(settingsStore.readSettings()?.customEndpoint ? [{ id: "custom-endpoint", envVar: "CUSTOM_ENDPOINT_API_KEY", keyPresent: keyValue("CUSTOM_ENDPOINT_API_KEY") !== undefined }] : []),
+	]).sort((a, b) => a.id.localeCompare(b.id));
 }
 
 /** The providers whose key is present — the picker federates exactly
@@ -197,6 +204,8 @@ export function modelCatalog(): ModelCatalogResponse {
 		.map(toModelDto)
 		.sort((a, b) => (a.provider === b.provider ? a.id.localeCompare(b.id) : a.provider.localeCompare(b.provider)))
 		.concat(chatGPTModels().map(toModelDto));
+	const custom = settingsStore.readSettings()?.customEndpoint;
+	if (custom && keyValue("CUSTOM_ENDPOINT_API_KEY")) models.push(toModelDto(customEndpointModel(custom)));
 	return {
 		models,
 		defaults: catalogDefaults(),

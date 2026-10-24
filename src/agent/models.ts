@@ -8,6 +8,7 @@ import {
 	type StreamFunction,
 } from "@earendil-works/pi-ai";
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
+import { streamSimple as openAICompatibleStream } from "@earendil-works/pi-ai/api/openai-completions";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { type ModelRole } from "../../config.ts";
 import { DEFAULT_THINKING_ORDER } from "../core/settings.ts";
@@ -69,6 +70,25 @@ export function openRouterApiKey(): string | undefined {
 	return process.env.OPENROUTER_API_KEY || undefined;
 }
 
+export interface CustomEndpointConfig { baseUrl: string; modelId: string; apiKey: string; maxTokens?: number }
+
+/** Custom endpoints have no reliable price or context-window catalog. */
+export function customEndpointModel(config: Pick<CustomEndpointConfig, "baseUrl" | "modelId" | "maxTokens">): Model<"openai-completions"> {
+	return {
+		id: config.modelId,
+		name: config.modelId,
+		api: "openai-completions",
+		provider: "custom-endpoint",
+		baseUrl: config.baseUrl,
+		input: ["text"],
+		reasoning: false,
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 0,
+		maxTokens: config.maxTokens ?? 0,
+		compat: { supportsDeveloperRole: false, supportsReasoningEffort: false },
+	};
+}
+
 /** A fully-resolved model pin — the shape every engine now comes from:
  *  the settings-resolution chain's output (role override → slot, or the
  *  chat's conversation chain). thinkingLevel is OPTIONAL: unset means
@@ -96,9 +116,9 @@ function defaultThinkingLevel(model: Model<Api>): ThinkingLevel {
  *  key is resolved by pi-ai itself from the environment per request (the
  *  keys seam reflects file-saved keys into env), so the engine never
  *  hardcodes OpenRouter's. */
-export function piEngineForSpec(spec: ResolvedModelSpec, background: boolean | (() => boolean) = true, lifecycle?: ChatGPTDispatchLifecycle): PiEngine {
+export function piEngineForSpec(spec: ResolvedModelSpec, background: boolean | (() => boolean) = true, lifecycle?: ChatGPTDispatchLifecycle, custom?: CustomEndpointConfig): PiEngine {
 	const models: Models = piModels();
-	const model = spec.provider === "chatgpt" ? chatGPTModel(spec.id) : models.getModel(spec.provider, spec.id);
+	const model = spec.provider === "chatgpt" ? chatGPTModel(spec.id) : spec.provider === "custom-endpoint" && custom?.modelId === spec.id ? customEndpointModel(custom) : models.getModel(spec.provider, spec.id);
 	if (!model) {
 		throw new Error(`${spec.provider} catalog has no model ${spec.id}`);
 	}
@@ -115,6 +135,7 @@ export function piEngineForSpec(spec: ResolvedModelSpec, background: boolean | (
 		// `reasoning` (undefined = off on pi-ai's scale); the clamp above keeps
 		// the pin honest even when config or settings drift off the map.
 		streamFn: (requestModel, context, options) => {
+			if (spec.provider === "custom-endpoint" && custom) return openAICompatibleStream(requestModel as Model<"openai-completions">, context, { ...options, apiKey: custom.apiKey });
 			const stream = spec.provider === "chatgpt" ? chatGPTStream(typeof background === "function" ? background : () => background, lifecycle) : models.streamSimple.bind(models);
 			return stream(requestModel, context, { ...options, reasoning: level === "off" ? undefined : level });
 		},

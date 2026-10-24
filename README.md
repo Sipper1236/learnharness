@@ -52,6 +52,24 @@ Add your provider API key and choose your models, then start a session with what
 
 All three platforms support in-app updates.
 
+### Custom OpenAI-compatible endpoints
+
+In Settings → Providers, save your Chat Completions base URL (for example, `https://gateway.example/v1`, not `/v1/models`) and model ID, then add the **Custom endpoint** API key and select the model in your model slots. Remote endpoints require HTTPS; HTTP is allowed on loopback.
+
+If your endpoint needs an explicit output limit, set `customEndpoint.maxTokens` in your local `settings.json`, for example:
+
+```json
+{
+  "customEndpoint": {
+    "baseUrl": "https://gateway.example/v1",
+    "modelId": "your-model-id",
+    "maxTokens": 2048
+  }
+}
+```
+
+Omitting the limit retains the default behavior. Custom models are text-only and do not declare pricing or a context-window size.
+
 ## Your keys, your data
 
 - **Your keys and models.** No LearnHarness subscription or markup. You pay your providers for usage; a live cost meter shows model costs.
