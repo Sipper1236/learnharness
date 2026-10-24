@@ -41,6 +41,12 @@ const SIDEBAR_AUTOCLOSE = 928;
 
 const PRODUCT_NAME = "LearnHarness";
 
+// Electron does not recognize Hyprland as a Linux desktop environment and
+// otherwise falls back to basic_text even when the Secret Service is running.
+// Force the real GNOME/libsecret backend; ChatGPT credentials must never use
+// Electron's hardcoded basic_text encryption.
+if (process.platform === "linux") app.commandLine.appendSwitch("password-store", "gnome-libsecret");
+
 // APP NAME → userData (owner, 2026-10-10): the Application Support dir is
 // exactly "LearnHarness" in dev AND packaged. Packaged Electron would
 // otherwise derive it from package.json "name" (now lowercase

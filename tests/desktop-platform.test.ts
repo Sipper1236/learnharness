@@ -16,6 +16,7 @@ const mainRequire = createRequire(mainFile);
  * Then call the REAL createWindow with a stub Electron API and inspect its
  * constructor options. No rewritten copy of the production logic. */
 function windowOptions(platform: string) {
+	const switches: string[][] = [];
 	class FakeWindow {
 		constructor(readonly options: unknown) {}
 		webContents = { on() {}, setWindowOpenHandler() {} };
@@ -23,7 +24,7 @@ function windowOptions(platform: string) {
 		once() {}
 	}
 	const electron = {
-		app: { setName() {}, requestSingleInstanceLock: () => false, quit() {} },
+		app: { setName() {}, commandLine: { appendSwitch(...args: string[]) { switches.push(args); } }, requestSingleInstanceLock: () => false, quit() {} },
 		BrowserWindow: FakeWindow,
 		session: { defaultSession: { setPermissionRequestHandler() {}, setPermissionCheckHandler() {} } },
 	};
@@ -35,12 +36,13 @@ function windowOptions(platform: string) {
 	runInNewContext(mainSource, context, { filename: mainFile });
 	const win = runInNewContext('createWindow("http://127.0.0.1:9000")', context) as FakeWindow;
 	// The options originate in a VM realm; normalize prototypes for assertions.
-	return JSON.parse(JSON.stringify(win.options));
+	return { options: JSON.parse(JSON.stringify(win.options)), switches };
 }
 
 describe("desktop window chrome", () => {
 	it("macOS keeps the proven traffic lights and does not enable WCO", () => {
-		const options = windowOptions("darwin");
+		const { options, switches } = windowOptions("darwin");
+		assert.deepEqual(switches, []);
 		assert.equal(options.titleBarStyle, "hiddenInset");
 		assert.deepEqual(options.trafficLightPosition, { x: 16, y: 22.5 });
 		assert.equal(options.titleBarOverlay, undefined);
@@ -49,7 +51,8 @@ describe("desktop window chrome", () => {
 
 	for (const platform of ["win32", "linux"]) {
 		it(`${platform} uses native-height right-side controls with an Alt-accessible menu`, () => {
-			const options = windowOptions(platform);
+			const { options, switches } = windowOptions(platform);
+			assert.deepEqual(switches, platform === "linux" ? [["password-store", "gnome-libsecret"]] : []);
 			assert.equal(options.titleBarStyle, "hidden");
 			assert.deepEqual(options.titleBarOverlay, { color: "#141414", symbolColor: "#e5e5e5" });
 			assert.equal(Object.hasOwn(options.titleBarOverlay, "height"), false, "omit height so the OS selects its native default");
